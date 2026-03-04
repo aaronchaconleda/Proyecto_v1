@@ -52,3 +52,29 @@ class LMStudioClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def list_models(self) -> List[Dict[str, Any]]:
+        base = self.base_url
+        root = base[:-3] if base.endswith("/v1") else base
+        candidate_urls = [
+            f"{base}/models",
+            f"{root}/api/v1/models",
+            f"{root}/v1/models",
+        ]
+
+        for url in candidate_urls:
+            try:
+                response = requests.get(
+                    url,
+                    headers=self._headers(),
+                    timeout=30,
+                )
+                if response.status_code == 200:
+                    payload = response.json()
+                    if isinstance(payload, dict) and "data" in payload:
+                        return payload["data"]
+                    if isinstance(payload, dict) and "models" in payload:
+                        return payload["models"]
+            except requests.RequestException:
+                continue
+        raise requests.HTTPError("No se pudo obtener el listado de modelos desde LM Studio.")

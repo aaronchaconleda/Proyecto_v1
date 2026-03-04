@@ -1,2 +1,9 @@
 .venv
 docs
+data
+# Python bytecode (los archivos .pyc que ves en tu imagen)
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.vscode/

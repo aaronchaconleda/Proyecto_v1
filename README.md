@@ -39,6 +39,22 @@ LM Studio debe estar corriendo con API OpenAI-compatible en:
 
 ## Uso rapido
 
+### Opcion A: flujo guiado (un solo comando)
+
+```bash
+python -m app.cli wizard
+```
+
+El asistente de consola te pedira:
+- Modelo conversacional (listado desde LM Studio).
+- Modelo de embedding (listado desde LM Studio).
+- Ruta del documento.
+- `session_id`, `doc_id`, idioma y `top_k`.
+
+Luego indexa y abre modo chat en la misma consola.
+
+### Opcion B: comandos separados
+
 1. Crear sesion:
 
 ```bash

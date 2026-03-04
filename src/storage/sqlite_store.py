@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from dataclasses import asdict
@@ -13,6 +14,14 @@ from src.chunking.chunk_metadata import ChunkRecord
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_fts_query(query: str) -> str:
+    # Keep only word-like tokens and quote each term to avoid FTS syntax errors.
+    tokens = re.findall(r"\w+", query.lower(), flags=re.UNICODE)
+    if not tokens:
+        return ""
+    return " OR ".join(f'"{token}"' for token in tokens)
 
 
 class SQLiteStore:
@@ -214,17 +223,23 @@ class SQLiteStore:
         return [dict(row) for row in reversed(rows)]
 
     def search_chunks_fts(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        rows = self.conn.execute(
-            """
-            SELECT c.chunk_id, c.doc_id, c.page, c.section, c.text, bm25(chunks_fts) AS score
-            FROM chunks_fts
-            JOIN chunks c ON c.rowid = chunks_fts.rowid
-            WHERE chunks_fts MATCH ?
-            ORDER BY score ASC
-            LIMIT ?
-            """,
-            (query, top_k),
-        ).fetchall()
+        safe_query = _safe_fts_query(query)
+        if not safe_query:
+            return []
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT c.chunk_id, c.doc_id, c.page, c.section, c.text, bm25(chunks_fts) AS score
+                FROM chunks_fts
+                JOIN chunks c ON c.rowid = chunks_fts.rowid
+                WHERE chunks_fts MATCH ?
+                ORDER BY score ASC
+                LIMIT ?
+                """,
+                (safe_query, top_k),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
         # bm25 in SQLite returns lower is better; invert to align with vector score.
         return [
             {
