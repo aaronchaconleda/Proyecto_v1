@@ -69,7 +69,13 @@ Durante `wizard` puedes indicar filtro opcional de `doc_id` (uno o varios separa
 python -m app.cli init-session --session-id demo-es
 ```
 
-2. Indexar documento:
+2. Ver documentos indexados:
+
+```bash
+python -m app.cli list-docs
+```
+
+3. Indexar documento:
 
 ```bash
 python -m app.cli index docs/Demo_SPA.pdf --doc-id demo_spa --lang es

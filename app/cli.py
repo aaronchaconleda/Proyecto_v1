@@ -91,6 +91,26 @@ def init_session(session_id: Optional[str] = typer.Option(None, "--session-id"))
     typer.echo(f"session_id={sid}")
 
 
+@cli.command("list-docs")
+def list_docs_cmd():
+    _, sqlite_store, _, _, _, _ = _bootstrap()
+    docs = sqlite_store.list_documents_summary()
+    if not docs:
+        typer.echo("No hay documentos indexados.")
+        sqlite_store.close()
+        return
+
+    typer.echo("Documentos indexados:")
+    for idx, item in enumerate(docs, start=1):
+        typer.echo(
+            f"{idx}. doc_id={item['doc_id']} chunks={item['chunk_count']} lang={item.get('language') or '-'} "
+            f"embedding={item['embedding_model']}"
+        )
+        typer.echo(f"   path={item['path']}")
+        typer.echo(f"   created_at={item['created_at']}")
+    sqlite_store.close()
+
+
 @cli.command("index")
 def index_cmd(
     doc_path: str = typer.Argument(..., help="Ruta del documento PDF/TXT/MD."),

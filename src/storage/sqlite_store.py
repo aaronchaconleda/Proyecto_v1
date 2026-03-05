@@ -347,5 +347,23 @@ class SQLiteStore:
         row = self.conn.execute("SELECT COUNT(*) AS total FROM chunks").fetchone()
         return int(row["total"]) if row else 0
 
+    def list_documents_summary(self) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                d.doc_id,
+                d.path,
+                d.language,
+                d.embedding_model,
+                d.created_at,
+                COUNT(c.chunk_id) AS chunk_count
+            FROM documents d
+            LEFT JOIN chunks c ON c.doc_id = d.doc_id
+            GROUP BY d.doc_id, d.path, d.language, d.embedding_model, d.created_at
+            ORDER BY d.created_at DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def close(self) -> None:
         self.conn.close()
