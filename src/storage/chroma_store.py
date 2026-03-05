@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import chromadb
 
@@ -35,11 +35,21 @@ class ChromaStore:
             ],
         )
 
-    def query(self, query_embedding: List[float], top_k: int) -> List[Dict]:
+    def query(
+        self,
+        query_embedding: List[float],
+        top_k: int,
+        doc_ids: Optional[List[str]] = None,
+    ) -> List[Dict]:
+        where = None
+        if doc_ids:
+            where = {"doc_id": {"$in": doc_ids}} if len(doc_ids) > 1 else {"doc_id": doc_ids[0]}
+
         result = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
+            where=where,
         )
 
         ids = result.get("ids", [[]])[0]

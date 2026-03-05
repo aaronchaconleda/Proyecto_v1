@@ -222,22 +222,41 @@ class SQLiteStore:
         ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
-    def search_chunks_fts(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+    def search_chunks_fts(
+        self,
+        query: str,
+        top_k: int,
+        doc_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         safe_query = _safe_fts_query(query)
         if not safe_query:
             return []
         try:
-            rows = self.conn.execute(
+            if doc_ids:
+                placeholders = ", ".join(["?"] * len(doc_ids))
+                sql = f"""
+                    SELECT c.chunk_id, c.doc_id, c.page, c.section, c.text, bm25(chunks_fts) AS score
+                    FROM chunks_fts
+                    JOIN chunks c ON c.rowid = chunks_fts.rowid
+                    WHERE chunks_fts MATCH ?
+                    AND c.doc_id IN ({placeholders})
+                    ORDER BY score ASC
+                    LIMIT ?
                 """
-                SELECT c.chunk_id, c.doc_id, c.page, c.section, c.text, bm25(chunks_fts) AS score
-                FROM chunks_fts
-                JOIN chunks c ON c.rowid = chunks_fts.rowid
-                WHERE chunks_fts MATCH ?
-                ORDER BY score ASC
-                LIMIT ?
-                """,
-                (safe_query, top_k),
-            ).fetchall()
+                params = [safe_query, *doc_ids, top_k]
+                rows = self.conn.execute(sql, params).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT c.chunk_id, c.doc_id, c.page, c.section, c.text, bm25(chunks_fts) AS score
+                    FROM chunks_fts
+                    JOIN chunks c ON c.rowid = chunks_fts.rowid
+                    WHERE chunks_fts MATCH ?
+                    ORDER BY score ASC
+                    LIMIT ?
+                    """,
+                    (safe_query, top_k),
+                ).fetchall()
         except sqlite3.OperationalError:
             return []
         # bm25 in SQLite returns lower is better; invert to align with vector score.
@@ -323,6 +342,10 @@ class SQLiteStore:
             rows,
         )
         self.conn.commit()
+
+    def count_chunks(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) AS total FROM chunks").fetchone()
+        return int(row["total"]) if row else 0
 
     def close(self) -> None:
         self.conn.close()

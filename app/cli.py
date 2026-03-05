@@ -60,6 +60,13 @@ def _split_chat_and_embedding_models(models):
     return chat_models, embedding_models
 
 
+def _parse_doc_id_filter(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    parts = [item.strip() for item in raw.split(",")]
+    return [item for item in parts if item]
+
+
 def _bootstrap():
     settings = load_settings()
     sqlite_store = SQLiteStore(settings.sqlite_path)
@@ -96,8 +103,16 @@ def index_cmd(
     if not path.exists():
         raise typer.BadParameter(f"No existe archivo: {path}")
 
-    if embedding_model:
-        settings.embedding_model = embedding_model
+    selected_embedding_model = embedding_model
+    if not selected_embedding_model:
+        models = lmstudio.list_models()
+        _, embedding_models = _split_chat_and_embedding_models(models)
+        selected_embedding_model = _pick_model_interactive(
+            embedding_models,
+            title="Modelos de embedding disponibles:",
+            default_name=settings.embedding_model,
+        )
+    settings.embedding_model = selected_embedding_model
 
     final_doc_id = doc_id or path.stem
     count = index_document(
@@ -118,9 +133,23 @@ def chat_cmd(
     question: str = typer.Argument(...),
     chat_model: Optional[str] = typer.Option(None, "--chat-model"),
     top_k: Optional[int] = typer.Option(None, "--top-k"),
+    doc_id_filter: Optional[str] = typer.Option(
+        None,
+        "--doc-id-filter",
+        help="Filtra retrieval por doc_id. Multiples por coma: doc1,doc2",
+    ),
 ):
     settings, sqlite_store, _, lmstudio, vector, hybrid = _bootstrap()
     sqlite_store.create_session(session_id=session_id)
+    selected_chat_model = chat_model
+    if not selected_chat_model:
+        models = lmstudio.list_models()
+        chat_models, _ = _split_chat_and_embedding_models(models)
+        selected_chat_model = _pick_model_interactive(
+            chat_models,
+            title="Modelos conversacionales disponibles:",
+            default_name=chat_model or settings.chat_model,
+        )
 
     result = answer_question(
         settings=settings,
@@ -130,8 +159,9 @@ def chat_cmd(
         hybrid_retriever=hybrid if settings.retrieval_hybrid else None,
         session_id=session_id,
         question=question,
-        chat_model=chat_model,
+        chat_model=selected_chat_model,
         top_k=top_k,
+        doc_id_filter=_parse_doc_id_filter(doc_id_filter),
     )
 
     typer.echo("Respuesta:")
@@ -147,7 +177,13 @@ def chat_cmd(
 
 
 @cli.command("wizard")
-def wizard_cmd():
+def wizard_cmd(
+    no_index: bool = typer.Option(
+        False,
+        "--no-index",
+        help="No indexar documento nuevo; usar solo la base RAG ya existente.",
+    ),
+):
     settings, sqlite_store, sync, lmstudio, vector, hybrid = _bootstrap()
 
     typer.echo("Conectando con LM Studio para obtener modelos...")
@@ -168,30 +204,45 @@ def wizard_cmd():
         default_name=settings.embedding_model,
     )
 
-    doc_input = typer.prompt("Ruta del documento (PDF/TXT/MD)")
-    doc_path = Path(doc_input).expanduser().resolve()
-    if not doc_path.exists():
-        raise typer.BadParameter(f"No existe archivo: {doc_path}")
-
     session_id = typer.prompt("Session ID", default="demo-es")
-    doc_id = typer.prompt("Doc ID", default=doc_path.stem)
-    lang = typer.prompt("Idioma", default="es")
     top_k = int(typer.prompt("Top-K retrieval", default=str(settings.retrieval_top_k)))
+    filter_raw = typer.prompt("Filtro doc_id (opcional, separados por coma)", default="")
+    doc_id_filter = _parse_doc_id_filter(filter_raw)
+    should_index = False if no_index else typer.confirm("¿Quieres indexar un documento nuevo ahora?", default=True)
 
     settings.chat_model = selected_chat
     settings.embedding_model = selected_embedding
     sqlite_store.create_session(session_id=session_id)
 
-    typer.echo("\nIndexando documento...")
-    chunk_count = index_document(
-        settings=settings,
-        sync_service=sync,
-        client=lmstudio,
-        doc_id=doc_id,
-        file_path=doc_path,
-        language=lang,
-    )
-    typer.echo(f"Indexado completado. chunks={chunk_count}")
+    if should_index:
+        doc_input = typer.prompt("Ruta del documento (PDF/TXT/MD)")
+        doc_path = Path(doc_input).expanduser().resolve()
+        if not doc_path.exists():
+            raise typer.BadParameter(f"No existe archivo: {doc_path}")
+        doc_id = typer.prompt("Doc ID", default=doc_path.stem)
+        lang = typer.prompt("Idioma", default="es")
+
+        typer.echo("\nIndexando documento...")
+        chunk_count = index_document(
+            settings=settings,
+            sync_service=sync,
+            client=lmstudio,
+            doc_id=doc_id,
+            file_path=doc_path,
+            language=lang,
+        )
+        typer.echo(f"Indexado completado. chunks={chunk_count}")
+    else:
+        total_chunks = sqlite_store.count_chunks()
+        if total_chunks <= 0:
+            sqlite_store.close()
+            raise typer.BadParameter(
+                "No hay conocimiento indexado todavia. Indexa al menos un documento o ejecuta wizard sin --no-index."
+            )
+        typer.echo(f"Usando base RAG existente. chunks_disponibles={total_chunks}")
+
+    if doc_id_filter:
+        typer.echo(f"Filtro activo por doc_id: {', '.join(doc_id_filter)}")
     typer.echo("Modo conversacion listo. Escribe 'salir' para terminar.\n")
 
     while True:
@@ -212,6 +263,7 @@ def wizard_cmd():
             question=question,
             chat_model=selected_chat,
             top_k=top_k,
+            doc_id_filter=doc_id_filter,
         )
         typer.echo("\nRespuesta:")
         typer.echo(result["answer"])

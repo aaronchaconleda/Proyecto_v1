@@ -20,9 +20,20 @@ class HybridRetriever:
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
 
-    def retrieve(self, *, query: str, query_embedding: List[float], top_k: int) -> List[Dict]:
-        vector_results = self.vector_retriever.retrieve(query_embedding=query_embedding, top_k=top_k * 2)
-        keyword_results = self.keyword_retriever.retrieve(query=query, top_k=top_k * 2)
+    def retrieve(
+        self,
+        *,
+        query: str,
+        query_embedding: List[float],
+        top_k: int,
+        doc_ids: List[str] | None = None,
+    ) -> List[Dict]:
+        vector_results = self.vector_retriever.retrieve(
+            query_embedding=query_embedding,
+            top_k=top_k * 2,
+            doc_ids=doc_ids,
+        )
+        keyword_results = self.keyword_retriever.retrieve(query=query, top_k=top_k * 2, doc_ids=doc_ids)
 
         merged: Dict[str, Dict] = {}
         for item in vector_results:
