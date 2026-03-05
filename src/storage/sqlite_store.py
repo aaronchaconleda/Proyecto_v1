@@ -365,5 +365,36 @@ class SQLiteStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_document_summary(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            """
+            SELECT
+                d.doc_id,
+                d.path,
+                d.language,
+                d.embedding_model,
+                d.created_at,
+                COUNT(c.chunk_id) AS chunk_count
+            FROM documents d
+            LEFT JOIN chunks c ON c.doc_id = d.doc_id
+            WHERE d.doc_id = ?
+            GROUP BY d.doc_id, d.path, d.language, d.embedding_model, d.created_at
+            """,
+            (doc_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def delete_document(self, doc_id: str) -> int:
+        chunk_row = self.conn.execute(
+            "SELECT COUNT(*) AS total FROM chunks WHERE doc_id = ?",
+            (doc_id,),
+        ).fetchone()
+        chunk_count = int(chunk_row["total"]) if chunk_row else 0
+        cur = self.conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+        self.conn.commit()
+        if cur.rowcount <= 0:
+            return 0
+        return chunk_count
+
     def close(self) -> None:
         self.conn.close()

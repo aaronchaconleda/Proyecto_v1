@@ -111,6 +111,52 @@ def list_docs_cmd():
     sqlite_store.close()
 
 
+@cli.command("delete-doc")
+def delete_doc_cmd(
+    doc_id: str = typer.Option(..., "--doc-id", help="Identificador del documento a borrar."),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Muestra lo que se borraria sin ejecutar cambios.",
+    ),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Confirma borrado real (solo aplica con --no-dry-run).",
+    ),
+):
+    _, sqlite_store, _, _, _, _ = _bootstrap()
+    summary = sqlite_store.get_document_summary(doc_id)
+    if not summary:
+        typer.echo(f"No existe doc_id={doc_id}")
+        sqlite_store.close()
+        return
+
+    typer.echo("Documento objetivo:")
+    typer.echo(
+        f"doc_id={summary['doc_id']} chunks={summary['chunk_count']} embedding={summary['embedding_model']}"
+    )
+    typer.echo(f"path={summary['path']}")
+    typer.echo(f"created_at={summary['created_at']}")
+
+    if dry_run:
+        typer.echo("Dry-run activo: no se realizaron cambios.")
+        sqlite_store.close()
+        return
+
+    if not confirm:
+        typer.echo("Operacion cancelada. Usa --confirm para ejecutar borrado real.")
+        sqlite_store.close()
+        return
+
+    settings = load_settings()
+    chroma_store = ChromaStore(settings.chroma_dir)
+    chroma_store.delete_by_doc_id(doc_id)
+    deleted_chunks = sqlite_store.delete_document(doc_id)
+    typer.echo(f"Borrado completado: doc_id={doc_id} chunks_eliminados={deleted_chunks}")
+    sqlite_store.close()
+
+
 @cli.command("index")
 def index_cmd(
     doc_path: str = typer.Argument(..., help="Ruta del documento PDF/TXT/MD."),
