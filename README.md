@@ -53,6 +53,14 @@ El asistente de consola te pedira:
 
 Luego indexa y abre modo chat en la misma consola.
 
+Si ya tienes conocimiento cargado y no quieres subir documento nuevo:
+
+```bash
+python -m app.cli wizard --no-index
+```
+
+Durante `wizard` puedes indicar filtro opcional de `doc_id` (uno o varios separados por coma).
+
 ### Opcion B: comandos separados
 
 1. Crear sesion:
@@ -67,6 +75,8 @@ python -m app.cli init-session --session-id demo-es
 python -m app.cli index docs/Demo_SPA.pdf --doc-id demo_spa --lang es
 ```
 
+Si no pasas `--embedding-model`, el comando abre selector interactivo de embedding.
+
 Puedes forzar embedding model en indexado:
 
 ```bash
@@ -77,6 +87,20 @@ python -m app.cli index docs/Demo_SPA.pdf --doc-id demo_spa --embedding-model te
 
 ```bash
 python -m app.cli chat --session-id demo-es "Cual es el objetivo principal del documento?"
+```
+
+Si no pasas `--chat-model`, el comando abre selector interactivo de LLM.
+
+Filtrar consulta por documento especifico:
+
+```bash
+python -m app.cli chat --session-id demo-es --doc-id-filter Demo_SPA1 "Que dice sobre el administrador?"
+```
+
+Filtrar por varios documentos:
+
+```bash
+python -m app.cli chat --session-id demo-es --doc-id-filter Demo_SPA1,Demo_SPA2 "Compara los requisitos."
 ```
 
 Cambiar modelo conversacional por consulta:

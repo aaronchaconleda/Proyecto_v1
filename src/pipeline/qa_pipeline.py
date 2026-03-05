@@ -32,6 +32,7 @@ def answer_question(
     question: str,
     chat_model: Optional[str] = None,
     top_k: Optional[int] = None,
+    doc_id_filter: Optional[List[str]] = None,
 ) -> Dict:
     top_k = top_k or settings.retrieval_top_k
     chat_model = chat_model or settings.chat_model
@@ -46,9 +47,14 @@ def answer_question(
     start = time.perf_counter()
     query_embedding = lmstudio_client.embed_texts(settings.embedding_model, [question])[0]
     if settings.retrieval_hybrid and hybrid_retriever is not None:
-        candidates = hybrid_retriever.retrieve(query=question, query_embedding=query_embedding, top_k=top_k)
+        candidates = hybrid_retriever.retrieve(
+            query=question,
+            query_embedding=query_embedding,
+            top_k=top_k,
+            doc_ids=doc_id_filter,
+        )
     else:
-        candidates = vector_retriever.retrieve(query_embedding=query_embedding, top_k=top_k)
+        candidates = vector_retriever.retrieve(query_embedding=query_embedding, top_k=top_k, doc_ids=doc_id_filter)
         for item in candidates:
             item["score_final"] = item.get("score_vector", 0.0)
 
@@ -71,7 +77,11 @@ def answer_question(
         role="assistant",
         model=chat_model,
         content=answer,
-        retrieval_meta={"top_k": top_k, "chunks": [item["chunk_id"] for item in retrieved]},
+        retrieval_meta={
+            "top_k": top_k,
+            "doc_id_filter": doc_id_filter or [],
+            "chunks": [item["chunk_id"] for item in retrieved],
+        },
     )
 
     query_id = sqlite_store.create_query_log(
