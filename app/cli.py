@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 from typing import Optional
 
 import typer
@@ -65,6 +66,15 @@ def _parse_doc_id_filter(raw: Optional[str]) -> list[str]:
         return []
     parts = [item.strip() for item in raw.split(",")]
     return [item for item in parts if item]
+
+
+def _format_size(size_bytes: int) -> str:
+    size = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size_bytes} B"
 
 
 def _bootstrap():
@@ -155,6 +165,58 @@ def delete_doc_cmd(
     deleted_chunks = sqlite_store.delete_document(doc_id)
     typer.echo(f"Borrado completado: doc_id={doc_id} chunks_eliminados={deleted_chunks}")
     sqlite_store.close()
+
+
+@cli.command("vacuum-db")
+def vacuum_db_cmd():
+    settings = load_settings()
+    db_path = settings.sqlite_path
+    before = db_path.stat().st_size if db_path.exists() else 0
+
+    _, sqlite_store, _, _, _, _ = _bootstrap()
+    sqlite_store.vacuum()
+    sqlite_store.close()
+
+    after = db_path.stat().st_size if db_path.exists() else 0
+    typer.echo(
+        f"VACUUM rag.db completado: antes={_format_size(before)} despues={_format_size(after)} "
+        f"liberado={_format_size(max(0, before - after))}"
+    )
+
+
+@cli.command("vacuum-chroma")
+def vacuum_chroma_cmd(
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Confirma compactacion de chroma.sqlite3. Recomendado ejecutarlo sin indexado/chat activo.",
+    ),
+):
+    if not confirm:
+        typer.echo("Operacion cancelada. Usa --confirm para compactar Chroma.")
+        return
+
+    settings = load_settings()
+    chroma_sqlite = settings.chroma_dir / "chroma.sqlite3"
+    if not chroma_sqlite.exists():
+        typer.echo(f"No existe archivo de Chroma: {chroma_sqlite}")
+        return
+
+    before = chroma_sqlite.stat().st_size
+    try:
+        conn = sqlite3.connect(str(chroma_sqlite))
+        conn.execute("VACUUM")
+        conn.close()
+    except sqlite3.OperationalError as exc:
+        typer.echo(f"No se pudo compactar Chroma (posible bloqueo): {exc}")
+        typer.echo("Cierra procesos de chat/indexado y vuelve a intentarlo.")
+        return
+
+    after = chroma_sqlite.stat().st_size
+    typer.echo(
+        f"VACUUM chroma.sqlite3 completado: antes={_format_size(before)} despues={_format_size(after)} "
+        f"liberado={_format_size(max(0, before - after))}"
+    )
 
 
 @cli.command("index")

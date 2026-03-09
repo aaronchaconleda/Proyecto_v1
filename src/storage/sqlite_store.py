@@ -396,5 +396,8 @@ class SQLiteStore:
             return 0
         return chunk_count
 
+    def vacuum(self) -> None:
+        self.conn.execute("VACUUM")
+
     def close(self) -> None:
         self.conn.close()
