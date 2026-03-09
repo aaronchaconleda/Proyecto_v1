@@ -69,7 +69,39 @@ Durante `wizard` puedes indicar filtro opcional de `doc_id` (uno o varios separa
 python -m app.cli init-session --session-id demo-es
 ```
 
-2. Indexar documento:
+2. Ver documentos indexados:
+
+```bash
+python -m app.cli list-docs
+```
+
+3. Simular borrado de documento obsoleto (verificas doc_id correcto, ver chunks/documento / No se modifica ni SQLite ni Chroma):
+
+```bash
+python -m app.cli delete-doc --doc-id Demo_SPA1
+```
+
+4. Borrado real de documento obsoleto:
+
+```bash
+python -m app.cli delete-doc --doc-id Demo_SPA1 --no-dry-run --confirm
+```
+
+5. Compactar SQLite principal (`rag.db`):
+
+```bash
+python -m app.cli vacuum-db
+```
+
+6. Compactar SQLite de Chroma (`chroma.sqlite3`):
+
+```bash
+python -m app.cli vacuum-chroma --confirm
+```
+
+Recomendacion: ejecutar `vacuum-chroma` sin chat/indexado activos para evitar bloqueos.
+
+7. Indexar documento:
 
 ```bash
 python -m app.cli index docs/Demo_SPA.pdf --doc-id demo_spa --lang es
@@ -83,7 +115,7 @@ Puedes forzar embedding model en indexado:
 python -m app.cli index docs/Demo_SPA.pdf --doc-id demo_spa --embedding-model text-embedding-nomic-embed-code
 ```
 
-3. Preguntar en chat:
+8. Preguntar en chat:
 
 ```bash
 python -m app.cli chat --session-id demo-es "Cual es el objetivo principal del documento?"
@@ -108,3 +140,11 @@ Cambiar modelo conversacional por consulta:
 ```bash
 python -m app.cli chat --session-id demo-es --chat-model mistralai/mistral-3-3b "Resume la seccion de alcance."
 ```
+
+## Robustez y trazabilidad
+
+- Logs operativos en `data/logs/rag_cli.log`.
+- Validacion de indice vacio antes de `chat`.
+- Validacion de `doc_id_filter` contra documentos existentes.
+- Validacion de modelos explicitos (`--chat-model`, `--embedding-model`) contra LM Studio.
+- Mensajes de error claros para caida/no disponibilidad de LM Studio y bloqueos de SQLite.

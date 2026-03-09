@@ -70,3 +70,6 @@ class ChromaStore:
                 }
             )
         return items
+
+    def delete_by_doc_id(self, doc_id: str) -> None:
+        self.collection.delete(where={"doc_id": doc_id})
