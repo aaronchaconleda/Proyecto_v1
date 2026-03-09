@@ -4,8 +4,10 @@ from pathlib import Path
 import sqlite3
 from typing import Optional
 
+import requests
 import typer
 
+from src.config.logging_setup import setup_logging
 from src.config.settings import load_settings
 from src.llm.lmstudio_client import LMStudioClient
 from src.pipeline.index_pipeline import index_document
@@ -45,6 +47,10 @@ def _pick_model_interactive(models, title: str, default_name: str) -> str:
     return chosen.get("id") or chosen.get("name")
 
 
+def _model_id(model: dict) -> str:
+    return str(model.get("id") or model.get("name") or "")
+
+
 def _split_chat_and_embedding_models(models):
     chat_models = []
     embedding_models = []
@@ -79,6 +85,7 @@ def _format_size(size_bytes: int) -> str:
 
 def _bootstrap():
     settings = load_settings()
+    logger = setup_logging(settings.data_dir / "logs")
     sqlite_store = SQLiteStore(settings.sqlite_path)
     chroma_store = ChromaStore(settings.chroma_dir)
     sync = SyncService(sqlite_store, chroma_store)
@@ -91,19 +98,38 @@ def _bootstrap():
         vector_weight=settings.retrieval_vector_weight,
         keyword_weight=settings.retrieval_keyword_weight,
     )
-    return settings, sqlite_store, sync, lmstudio, vector, hybrid
+    return settings, sqlite_store, sync, lmstudio, vector, hybrid, logger
+
+
+def _load_models_or_fail(lmstudio: LMStudioClient):
+    try:
+        return lmstudio.list_models()
+    except requests.RequestException as exc:
+        raise typer.BadParameter(
+            "No se pudo conectar con LM Studio para listar modelos. Verifica que este activo."
+        ) from exc
+
+
+def _validate_doc_filter_or_fail(sqlite_store: SQLiteStore, doc_ids: list[str]) -> None:
+    if not doc_ids:
+        return
+    existing = set(sqlite_store.existing_doc_ids(doc_ids))
+    missing = [doc_id for doc_id in doc_ids if doc_id not in existing]
+    if missing:
+        raise typer.BadParameter(f"doc_id_filter invalido. No existen: {', '.join(missing)}")
 
 
 @cli.command("init-session")
 def init_session(session_id: Optional[str] = typer.Option(None, "--session-id")):
-    _, sqlite_store, _, _, _, _ = _bootstrap()
+    _, sqlite_store, _, _, _, _, logger = _bootstrap()
     sid = sqlite_store.create_session(session_id=session_id)
+    logger.info("session_created session_id=%s", sid)
     typer.echo(f"session_id={sid}")
 
 
 @cli.command("list-docs")
 def list_docs_cmd():
-    _, sqlite_store, _, _, _, _ = _bootstrap()
+    _, sqlite_store, _, _, _, _, logger = _bootstrap()
     docs = sqlite_store.list_documents_summary()
     if not docs:
         typer.echo("No hay documentos indexados.")
@@ -118,6 +144,7 @@ def list_docs_cmd():
         )
         typer.echo(f"   path={item['path']}")
         typer.echo(f"   created_at={item['created_at']}")
+    logger.info("list_docs total=%s", len(docs))
     sqlite_store.close()
 
 
@@ -135,7 +162,7 @@ def delete_doc_cmd(
         help="Confirma borrado real (solo aplica con --no-dry-run).",
     ),
 ):
-    _, sqlite_store, _, _, _, _ = _bootstrap()
+    settings, sqlite_store, _, _, _, _, logger = _bootstrap()
     summary = sqlite_store.get_document_summary(doc_id)
     if not summary:
         typer.echo(f"No existe doc_id={doc_id}")
@@ -159,11 +186,15 @@ def delete_doc_cmd(
         sqlite_store.close()
         return
 
-    settings = load_settings()
     chroma_store = ChromaStore(settings.chroma_dir)
-    chroma_store.delete_by_doc_id(doc_id)
-    deleted_chunks = sqlite_store.delete_document(doc_id)
-    typer.echo(f"Borrado completado: doc_id={doc_id} chunks_eliminados={deleted_chunks}")
+    try:
+        chroma_store.delete_by_doc_id(doc_id)
+        deleted_chunks = sqlite_store.delete_document(doc_id)
+        logger.info("delete_doc doc_id=%s chunks=%s", doc_id, deleted_chunks)
+        typer.echo(f"Borrado completado: doc_id={doc_id} chunks_eliminados={deleted_chunks}")
+    except Exception as exc:
+        logger.exception("delete_doc_error doc_id=%s", doc_id)
+        typer.echo(f"Error al borrar documento: {exc}")
     sqlite_store.close()
 
 
@@ -173,7 +204,7 @@ def vacuum_db_cmd():
     db_path = settings.sqlite_path
     before = db_path.stat().st_size if db_path.exists() else 0
 
-    _, sqlite_store, _, _, _, _ = _bootstrap()
+    _, sqlite_store, _, _, _, _, logger = _bootstrap()
     sqlite_store.vacuum()
     sqlite_store.close()
 
@@ -182,6 +213,7 @@ def vacuum_db_cmd():
         f"VACUUM rag.db completado: antes={_format_size(before)} despues={_format_size(after)} "
         f"liberado={_format_size(max(0, before - after))}"
     )
+    logger.info("vacuum_db before=%s after=%s", before, after)
 
 
 @cli.command("vacuum-chroma")
@@ -192,6 +224,7 @@ def vacuum_chroma_cmd(
         help="Confirma compactacion de chroma.sqlite3. Recomendado ejecutarlo sin indexado/chat activo.",
     ),
 ):
+    logger = setup_logging(load_settings().data_dir / "logs")
     if not confirm:
         typer.echo("Operacion cancelada. Usa --confirm para compactar Chroma.")
         return
@@ -208,6 +241,7 @@ def vacuum_chroma_cmd(
         conn.execute("VACUUM")
         conn.close()
     except sqlite3.OperationalError as exc:
+        logger.warning("vacuum_chroma_locked path=%s error=%s", chroma_sqlite, exc)
         typer.echo(f"No se pudo compactar Chroma (posible bloqueo): {exc}")
         typer.echo("Cierra procesos de chat/indexado y vuelve a intentarlo.")
         return
@@ -217,6 +251,7 @@ def vacuum_chroma_cmd(
         f"VACUUM chroma.sqlite3 completado: antes={_format_size(before)} despues={_format_size(after)} "
         f"liberado={_format_size(max(0, before - after))}"
     )
+    logger.info("vacuum_chroma before=%s after=%s path=%s", before, after, chroma_sqlite)
 
 
 @cli.command("index")
@@ -226,14 +261,19 @@ def index_cmd(
     lang: str = typer.Option("es", "--lang"),
     embedding_model: Optional[str] = typer.Option(None, "--embedding-model"),
 ):
-    settings, sqlite_store, sync, lmstudio, _, _ = _bootstrap()
+    settings, sqlite_store, sync, lmstudio, _, _, logger = _bootstrap()
     path = Path(doc_path).resolve()
     if not path.exists():
         raise typer.BadParameter(f"No existe archivo: {path}")
 
     selected_embedding_model = embedding_model
-    if not selected_embedding_model:
-        models = lmstudio.list_models()
+    models = _load_models_or_fail(lmstudio)
+    if selected_embedding_model:
+        available = {_model_id(m) for m in models}
+        if selected_embedding_model not in available:
+            sqlite_store.close()
+            raise typer.BadParameter(f"Embedding model no disponible en LM Studio: {selected_embedding_model}")
+    else:
         _, embedding_models = _split_chat_and_embedding_models(models)
         selected_embedding_model = _pick_model_interactive(
             embedding_models,
@@ -243,15 +283,23 @@ def index_cmd(
     settings.embedding_model = selected_embedding_model
 
     final_doc_id = doc_id or path.stem
-    count = index_document(
-        settings=settings,
-        sync_service=sync,
-        client=lmstudio,
-        doc_id=final_doc_id,
-        file_path=path,
-        language=lang,
-    )
-    typer.echo(f"doc_id={final_doc_id} chunks_indexados={count}")
+    try:
+        count = index_document(
+            settings=settings,
+            sync_service=sync,
+            client=lmstudio,
+            doc_id=final_doc_id,
+            file_path=path,
+            language=lang,
+        )
+        logger.info("index_ok doc_id=%s chunks=%s embedding=%s", final_doc_id, count, selected_embedding_model)
+        typer.echo(f"doc_id={final_doc_id} chunks_indexados={count}")
+    except requests.RequestException:
+        logger.exception("index_lmstudio_error doc_id=%s", final_doc_id)
+        typer.echo("Error conectando con LM Studio durante indexado. Verifica que este activo y modelo cargado.")
+    except Exception as exc:
+        logger.exception("index_error doc_id=%s", final_doc_id)
+        typer.echo(f"Error en indexado: {exc}")
     sqlite_store.close()
 
 
@@ -267,11 +315,23 @@ def chat_cmd(
         help="Filtra retrieval por doc_id. Multiples por coma: doc1,doc2",
     ),
 ):
-    settings, sqlite_store, _, lmstudio, vector, hybrid = _bootstrap()
+    settings, sqlite_store, _, lmstudio, vector, hybrid, logger = _bootstrap()
     sqlite_store.create_session(session_id=session_id)
+    if sqlite_store.count_chunks() <= 0:
+        sqlite_store.close()
+        raise typer.BadParameter("No hay documentos indexados. Ejecuta index o wizard primero.")
+
+    parsed_filter = _parse_doc_id_filter(doc_id_filter)
+    _validate_doc_filter_or_fail(sqlite_store, parsed_filter)
+
     selected_chat_model = chat_model
-    if not selected_chat_model:
-        models = lmstudio.list_models()
+    models = _load_models_or_fail(lmstudio)
+    if selected_chat_model:
+        available = {_model_id(m) for m in models}
+        if selected_chat_model not in available:
+            sqlite_store.close()
+            raise typer.BadParameter(f"Chat model no disponible en LM Studio: {selected_chat_model}")
+    else:
         chat_models, _ = _split_chat_and_embedding_models(models)
         selected_chat_model = _pick_model_interactive(
             chat_models,
@@ -279,18 +339,29 @@ def chat_cmd(
             default_name=chat_model or settings.chat_model,
         )
 
-    result = answer_question(
-        settings=settings,
-        sqlite_store=sqlite_store,
-        lmstudio_client=lmstudio,
-        vector_retriever=vector,
-        hybrid_retriever=hybrid if settings.retrieval_hybrid else None,
-        session_id=session_id,
-        question=question,
-        chat_model=selected_chat_model,
-        top_k=top_k,
-        doc_id_filter=_parse_doc_id_filter(doc_id_filter),
-    )
+    try:
+        result = answer_question(
+            settings=settings,
+            sqlite_store=sqlite_store,
+            lmstudio_client=lmstudio,
+            vector_retriever=vector,
+            hybrid_retriever=hybrid if settings.retrieval_hybrid else None,
+            session_id=session_id,
+            question=question,
+            chat_model=selected_chat_model,
+            top_k=top_k,
+            doc_id_filter=parsed_filter,
+        )
+    except requests.RequestException:
+        logger.exception("chat_lmstudio_error session_id=%s", session_id)
+        typer.echo("Error conectando con LM Studio durante chat. Verifica servidor y modelo.")
+        sqlite_store.close()
+        return
+    except Exception as exc:
+        logger.exception("chat_error session_id=%s", session_id)
+        typer.echo(f"Error en chat: {exc}")
+        sqlite_store.close()
+        return
 
     typer.echo("Respuesta:")
     typer.echo(result["answer"])
@@ -301,6 +372,7 @@ def chat_cmd(
             f"score={chunk.get('score_final', chunk.get('score_vector', 0.0)):.4f}"
         )
     typer.echo(f"\nlatency_ms={result['latency_ms']} query_id={result['query_id']}")
+    logger.info("chat_ok session_id=%s top_k=%s chunks=%s", session_id, top_k or settings.retrieval_top_k, len(result["chunks"]))
     sqlite_store.close()
 
 
@@ -312,10 +384,10 @@ def wizard_cmd(
         help="No indexar documento nuevo; usar solo la base RAG ya existente.",
     ),
 ):
-    settings, sqlite_store, sync, lmstudio, vector, hybrid = _bootstrap()
+    settings, sqlite_store, sync, lmstudio, vector, hybrid, logger = _bootstrap()
 
     typer.echo("Conectando con LM Studio para obtener modelos...")
-    models = lmstudio.list_models()
+    models = _load_models_or_fail(lmstudio)
     if not models:
         raise typer.BadParameter("LM Studio no devolvio modelos.")
 
@@ -336,7 +408,7 @@ def wizard_cmd(
     top_k = int(typer.prompt("Top-K retrieval", default=str(settings.retrieval_top_k)))
     filter_raw = typer.prompt("Filtro doc_id (opcional, separados por coma)", default="")
     doc_id_filter = _parse_doc_id_filter(filter_raw)
-    should_index = False if no_index else typer.confirm("¿Quieres indexar un documento nuevo ahora?", default=True)
+    should_index = False if no_index else typer.confirm("Quieres indexar un documento nuevo ahora?", default=True)
 
     settings.chat_model = selected_chat
     settings.embedding_model = selected_embedding
@@ -351,15 +423,25 @@ def wizard_cmd(
         lang = typer.prompt("Idioma", default="es")
 
         typer.echo("\nIndexando documento...")
-        chunk_count = index_document(
-            settings=settings,
-            sync_service=sync,
-            client=lmstudio,
-            doc_id=doc_id,
-            file_path=doc_path,
-            language=lang,
-        )
-        typer.echo(f"Indexado completado. chunks={chunk_count}")
+        try:
+            chunk_count = index_document(
+                settings=settings,
+                sync_service=sync,
+                client=lmstudio,
+                doc_id=doc_id,
+                file_path=doc_path,
+                language=lang,
+            )
+            logger.info("wizard_index_ok doc_id=%s chunks=%s", doc_id, chunk_count)
+            typer.echo(f"Indexado completado. chunks={chunk_count}")
+        except requests.RequestException:
+            logger.exception("wizard_index_lmstudio_error doc_id=%s", doc_id)
+            sqlite_store.close()
+            raise typer.BadParameter("Error conectando con LM Studio durante indexado.") from None
+        except Exception as exc:
+            logger.exception("wizard_index_error doc_id=%s", doc_id)
+            sqlite_store.close()
+            raise typer.BadParameter(f"Error durante indexado: {exc}") from None
     else:
         total_chunks = sqlite_store.count_chunks()
         if total_chunks <= 0:
@@ -369,6 +451,7 @@ def wizard_cmd(
             )
         typer.echo(f"Usando base RAG existente. chunks_disponibles={total_chunks}")
 
+    _validate_doc_filter_or_fail(sqlite_store, doc_id_filter)
     if doc_id_filter:
         typer.echo(f"Filtro activo por doc_id: {', '.join(doc_id_filter)}")
     typer.echo("Modo conversacion listo. Escribe 'salir' para terminar.\n")
@@ -381,18 +464,27 @@ def wizard_cmd(
         if not question:
             continue
 
-        result = answer_question(
-            settings=settings,
-            sqlite_store=sqlite_store,
-            lmstudio_client=lmstudio,
-            vector_retriever=vector,
-            hybrid_retriever=hybrid if settings.retrieval_hybrid else None,
-            session_id=session_id,
-            question=question,
-            chat_model=selected_chat,
-            top_k=top_k,
-            doc_id_filter=doc_id_filter,
-        )
+        try:
+            result = answer_question(
+                settings=settings,
+                sqlite_store=sqlite_store,
+                lmstudio_client=lmstudio,
+                vector_retriever=vector,
+                hybrid_retriever=hybrid if settings.retrieval_hybrid else None,
+                session_id=session_id,
+                question=question,
+                chat_model=selected_chat,
+                top_k=top_k,
+                doc_id_filter=doc_id_filter,
+            )
+        except requests.RequestException:
+            logger.exception("wizard_chat_lmstudio_error session_id=%s", session_id)
+            typer.echo("Error conectando con LM Studio durante chat.")
+            continue
+        except Exception as exc:
+            logger.exception("wizard_chat_error session_id=%s", session_id)
+            typer.echo(f"Error en chat: {exc}")
+            continue
         typer.echo("\nRespuesta:")
         typer.echo(result["answer"])
         typer.echo("\nFuentes:")
@@ -408,3 +500,4 @@ def wizard_cmd(
 
 if __name__ == "__main__":
     cli()
+

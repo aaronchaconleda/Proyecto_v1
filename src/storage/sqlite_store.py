@@ -347,6 +347,20 @@ class SQLiteStore:
         row = self.conn.execute("SELECT COUNT(*) AS total FROM chunks").fetchone()
         return int(row["total"]) if row else 0
 
+    def count_documents(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) AS total FROM documents").fetchone()
+        return int(row["total"]) if row else 0
+
+    def existing_doc_ids(self, doc_ids: List[str]) -> List[str]:
+        if not doc_ids:
+            return []
+        placeholders = ", ".join(["?"] * len(doc_ids))
+        rows = self.conn.execute(
+            f"SELECT doc_id FROM documents WHERE doc_id IN ({placeholders})",
+            doc_ids,
+        ).fetchall()
+        return [str(row["doc_id"]) for row in rows]
+
     def list_documents_summary(self) -> List[Dict[str, Any]]:
         rows = self.conn.execute(
             """

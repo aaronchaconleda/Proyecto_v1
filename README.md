@@ -140,3 +140,11 @@ Cambiar modelo conversacional por consulta:
 ```bash
 python -m app.cli chat --session-id demo-es --chat-model mistralai/mistral-3-3b "Resume la seccion de alcance."
 ```
+
+## Robustez y trazabilidad
+
+- Logs operativos en `data/logs/rag_cli.log`.
+- Validacion de indice vacio antes de `chat`.
+- Validacion de `doc_id_filter` contra documentos existentes.
+- Validacion de modelos explicitos (`--chat-model`, `--embedding-model`) contra LM Studio.
+- Mensajes de error claros para caida/no disponibilidad de LM Studio y bloqueos de SQLite.
