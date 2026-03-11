@@ -1,7 +1,8 @@
 ﻿# Proyecto_v1
 
-RAG local con:
-- LM Studio para embeddings y chat.
+RAG con dos perfiles en la misma estructura:
+- Perfil `local` (LM Studio para embeddings y chat).
+- Perfil `openai` (OpenAI para embeddings y chat).
 - ChromaDB para busqueda vectorial.
 - SQLite para documentos, chunks, sesiones e historial.
 
@@ -23,13 +24,52 @@ RAG local con:
 pip install -r requirements.txt
 ```
 
+## Configuracion `.env`
+
+1. Crea `.env` en la raiz del proyecto (puedes copiar `.env.example`).
+2. Define proveedor y credenciales:
+
+```env
+# Selector de perfil (recomendado)
+RAG_PROFILE=local   # o openai
+
+# Proveedor (opcional si ya usas RAG_PROFILE)
+# local  -> lmstudio
+# openai -> openai
+RAG_LLM_PROVIDER=lmstudio
+
+# Bases separadas por perfil (automatico por defecto):
+# local  -> data/rag_local.db + data/chroma_local
+# openai -> data/rag_openai.db + data/chroma_openai
+# RAG_SQLITE_PATH=./data/rag_local.db
+# RAG_CHROMA_DIR=./data/chroma_local
+
+LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+LMSTUDIO_API_KEY=lm-studio
+
+# Si usas OpenAI:
+# RAG_LLM_PROVIDER=openai
+# OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_API_KEY=tu_api_key
+```
+
+Notas:
+- `.env` esta ignorado por git.
+- Puedes mantener ambos bloques y cambiar solo `RAG_PROFILE` para alternar entre perfil local y OpenAI sin mezclar datos.
+
 LM Studio debe estar corriendo con API OpenAI-compatible en:
 - http://127.0.0.1:1234/v1
 
 ## Variables opcionales
 
-- RAG_CHAT_MODEL (default: qwen/qwen3-4b-thinking-2507)
-- RAG_EMBEDDING_MODEL (default: text-embedding-nomic-embed-code)
+- RAG_LLM_PROVIDER (default: lmstudio)
+- RAG_PROFILE (default: local)
+- RAG_SQLITE_PATH (default: data/rag_<profile>.db)
+- RAG_CHROMA_DIR (default: data/chroma_<profile>)
+- RAG_CHAT_MODEL (default segun perfil: `qwen/qwen3-4b-thinking-2507` en local, `gpt-5-nano` en openai)
+- RAG_EMBEDDING_MODEL (default segun perfil: `text-embedding-nomic-embed-code` en local, `text-embedding-3-small` en openai)
+- OPENAI_BASE_URL (default: https://api.openai.com/v1)
+- OPENAI_API_KEY (requerida si RAG_LLM_PROVIDER=openai)
 - RAG_CHUNK_SIZE (default: 500)
 - RAG_CHUNK_OVERLAP_RATIO (default: 0.15)
 - RAG_HYBRID (default: true)
@@ -87,7 +127,7 @@ python -m app.cli delete-doc --doc-id Demo_SPA1
 python -m app.cli delete-doc --doc-id Demo_SPA1 --no-dry-run --confirm
 ```
 
-5. Compactar SQLite principal (`rag.db`):
+5. Compactar SQLite principal (el archivo activo segun perfil, por ejemplo `rag_local.db` o `rag_openai.db`):
 
 ```bash
 python -m app.cli vacuum-db

@@ -13,5 +13,5 @@ class SyncService:
         self.chroma_store = chroma_store
 
     def upsert_chunks(self, chunks: List[ChunkRecord], embeddings: List[List[float]]) -> None:
-        self.sqlite_store.upsert_chunks(chunks)
         self.chroma_store.upsert_chunks(chunks, embeddings)
+        self.sqlite_store.upsert_chunks(chunks)

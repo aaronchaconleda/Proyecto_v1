@@ -7,3 +7,6 @@ data
 *.pyo
 *.pyd
 .vscode/
+.env
+.env.*
+!.env.example
