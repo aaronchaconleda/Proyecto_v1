@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 import typer
 
 from src.config.logging_setup import setup_logging
 from src.config.settings import load_settings
-from src.llm.lmstudio_client import LMStudioClient
+from src.llm.client_factory import create_llm_client
 from src.pipeline.index_pipeline import index_document
 from src.pipeline.qa_pipeline import answer_question
 from src.retrieval.hybrid_retriever import HybridRetriever
@@ -74,6 +74,20 @@ def _parse_doc_id_filter(raw: Optional[str]) -> list[str]:
     return [item for item in parts if item]
 
 
+def _existing_embedding_models(sqlite_store: SQLiteStore, doc_ids: Optional[list[str]] = None) -> list[str]:
+    docs = sqlite_store.list_documents_summary()
+    if doc_ids:
+        allowed = set(doc_ids)
+        docs = [item for item in docs if item.get("doc_id") in allowed]
+    models = sorted({str(item.get("embedding_model")) for item in docs if item.get("embedding_model")})
+    return models
+
+
+def _is_dimension_mismatch_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "expecting embedding with dimension" in msg and "got" in msg
+
+
 def _format_size(size_bytes: int) -> str:
     size = float(size_bytes)
     for unit in ("B", "KB", "MB", "GB"):
@@ -89,7 +103,10 @@ def _bootstrap():
     sqlite_store = SQLiteStore(settings.sqlite_path)
     chroma_store = ChromaStore(settings.chroma_dir)
     sync = SyncService(sqlite_store, chroma_store)
-    lmstudio = LMStudioClient(settings.lmstudio_base_url, settings.lmstudio_api_key)
+    try:
+        llm_client = create_llm_client(settings)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     vector = VectorRetriever(chroma_store)
     keyword = KeywordRetriever(sqlite_store)
     hybrid = HybridRetriever(
@@ -98,15 +115,19 @@ def _bootstrap():
         vector_weight=settings.retrieval_vector_weight,
         keyword_weight=settings.retrieval_keyword_weight,
     )
-    return settings, sqlite_store, sync, lmstudio, vector, hybrid, logger
+    return settings, sqlite_store, sync, llm_client, vector, hybrid, logger
 
 
-def _load_models_or_fail(lmstudio: LMStudioClient):
+def _provider_label(settings) -> str:
+    return "OpenAI" if settings.llm_provider.lower() == "openai" else "LM Studio"
+
+
+def _load_models_or_fail(llm_client: Any, provider_label: str):
     try:
-        return lmstudio.list_models()
+        return llm_client.list_models()
     except requests.RequestException as exc:
         raise typer.BadParameter(
-            "No se pudo conectar con LM Studio para listar modelos. Verifica que este activo."
+            f"No se pudo conectar con {provider_label} para listar modelos."
         ) from exc
 
 
@@ -267,18 +288,27 @@ def index_cmd(
         raise typer.BadParameter(f"No existe archivo: {path}")
 
     selected_embedding_model = embedding_model
-    models = _load_models_or_fail(lmstudio)
+    provider_label = _provider_label(settings)
+    models = _load_models_or_fail(lmstudio, provider_label)
     if selected_embedding_model:
         available = {_model_id(m) for m in models}
         if selected_embedding_model not in available:
             sqlite_store.close()
-            raise typer.BadParameter(f"Embedding model no disponible en LM Studio: {selected_embedding_model}")
+            raise typer.BadParameter(f"Embedding model no disponible en {provider_label}: {selected_embedding_model}")
     else:
         _, embedding_models = _split_chat_and_embedding_models(models)
         selected_embedding_model = _pick_model_interactive(
             embedding_models,
             title="Modelos de embedding disponibles:",
             default_name=settings.embedding_model,
+        )
+
+    existing_models = _existing_embedding_models(sqlite_store)
+    if existing_models and selected_embedding_model not in existing_models:
+        sqlite_store.close()
+        raise typer.BadParameter(
+            "La base actual ya usa otro embedding_model "
+            f"({', '.join(existing_models)}). Selecciona ese modelo o limpia/reindexa la base."
         )
     settings.embedding_model = selected_embedding_model
 
@@ -294,9 +324,10 @@ def index_cmd(
         )
         logger.info("index_ok doc_id=%s chunks=%s embedding=%s", final_doc_id, count, selected_embedding_model)
         typer.echo(f"doc_id={final_doc_id} chunks_indexados={count}")
-    except requests.RequestException:
+    except requests.RequestException as exc:
         logger.exception("index_lmstudio_error doc_id=%s", final_doc_id)
-        typer.echo("Error conectando con LM Studio durante indexado. Verifica que este activo y modelo cargado.")
+        typer.echo(f"Error conectando con {provider_label} durante indexado. Verifica servidor y modelo cargado.")
+        typer.echo(f"Detalle: {exc}")
     except Exception as exc:
         logger.exception("index_error doc_id=%s", final_doc_id)
         typer.echo(f"Error en indexado: {exc}")
@@ -323,14 +354,25 @@ def chat_cmd(
 
     parsed_filter = _parse_doc_id_filter(doc_id_filter)
     _validate_doc_filter_or_fail(sqlite_store, parsed_filter)
+    existing_models = _existing_embedding_models(sqlite_store, parsed_filter or None)
+    if len(existing_models) == 1 and settings.embedding_model != existing_models[0]:
+        settings.embedding_model = existing_models[0]
+        typer.echo(f"Embedding model ajustado automaticamente a: {settings.embedding_model}")
+    elif len(existing_models) > 1 and settings.embedding_model not in existing_models:
+        sqlite_store.close()
+        raise typer.BadParameter(
+            "Los documentos filtrados usan varios embedding_model y el configurado no coincide: "
+            f"configurado={settings.embedding_model} disponibles={', '.join(existing_models)}"
+        )
 
     selected_chat_model = chat_model
-    models = _load_models_or_fail(lmstudio)
+    provider_label = _provider_label(settings)
+    models = _load_models_or_fail(lmstudio, provider_label)
     if selected_chat_model:
         available = {_model_id(m) for m in models}
         if selected_chat_model not in available:
             sqlite_store.close()
-            raise typer.BadParameter(f"Chat model no disponible en LM Studio: {selected_chat_model}")
+            raise typer.BadParameter(f"Chat model no disponible en {provider_label}: {selected_chat_model}")
     else:
         chat_models, _ = _split_chat_and_embedding_models(models)
         selected_chat_model = _pick_model_interactive(
@@ -352,13 +394,22 @@ def chat_cmd(
             top_k=top_k,
             doc_id_filter=parsed_filter,
         )
-    except requests.RequestException:
-        logger.exception("chat_lmstudio_error session_id=%s", session_id)
-        typer.echo("Error conectando con LM Studio durante chat. Verifica servidor y modelo.")
+    except requests.RequestException as exc:
+        logger.exception("chat_provider_error session_id=%s provider=%s", session_id, settings.llm_provider)
+        typer.echo(f"Error conectando con {_provider_label(settings)} durante chat. Verifica servidor y modelo.")
+        typer.echo(f"Detalle: {exc}")
         sqlite_store.close()
         return
     except Exception as exc:
         logger.exception("chat_error session_id=%s", session_id)
+        if _is_dimension_mismatch_error(exc):
+            typer.echo(
+                "Error en chat: dimensiones de embedding incompatibles entre consulta y base vectorial. "
+                f"embedding_model_actual={settings.embedding_model}. "
+                "Usa el modelo con el que indexaste o reindexa."
+            )
+            sqlite_store.close()
+            return
         typer.echo(f"Error en chat: {exc}")
         sqlite_store.close()
         return
@@ -386,10 +437,11 @@ def wizard_cmd(
 ):
     settings, sqlite_store, sync, lmstudio, vector, hybrid, logger = _bootstrap()
 
-    typer.echo("Conectando con LM Studio para obtener modelos...")
-    models = _load_models_or_fail(lmstudio)
+    provider_label = _provider_label(settings)
+    typer.echo(f"Conectando con {provider_label} para obtener modelos...")
+    models = _load_models_or_fail(lmstudio, provider_label)
     if not models:
-        raise typer.BadParameter("LM Studio no devolvio modelos.")
+        raise typer.BadParameter(f"{provider_label} no devolvio modelos.")
 
     chat_models, embedding_models = _split_chat_and_embedding_models(models)
 
@@ -398,11 +450,6 @@ def wizard_cmd(
         title="Modelos conversacionales disponibles:",
         default_name=settings.chat_model,
     )
-    selected_embedding = _pick_model_interactive(
-        embedding_models,
-        title="Modelos de embedding disponibles:",
-        default_name=settings.embedding_model,
-    )
 
     session_id = typer.prompt("Session ID", default="demo-es")
     top_k = int(typer.prompt("Top-K retrieval", default=str(settings.retrieval_top_k)))
@@ -410,11 +457,28 @@ def wizard_cmd(
     doc_id_filter = _parse_doc_id_filter(filter_raw)
     should_index = False if no_index else typer.confirm("Quieres indexar un documento nuevo ahora?", default=True)
 
+    existing_models_for_filter = _existing_embedding_models(sqlite_store, doc_id_filter or None)
+    default_embedding = settings.embedding_model
+    if len(existing_models_for_filter) == 1:
+        default_embedding = existing_models_for_filter[0]
+    selected_embedding = _pick_model_interactive(
+        embedding_models,
+        title="Modelos de embedding disponibles:",
+        default_name=default_embedding,
+    )
+
     settings.chat_model = selected_chat
     settings.embedding_model = selected_embedding
     sqlite_store.create_session(session_id=session_id)
 
     if should_index:
+        existing_models_all = _existing_embedding_models(sqlite_store)
+        if existing_models_all and selected_embedding not in existing_models_all:
+            sqlite_store.close()
+            raise typer.BadParameter(
+                "La base actual ya usa otro embedding_model "
+                f"({', '.join(existing_models_all)}). Selecciona ese modelo o limpia/reindexa la base."
+            )
         doc_input = typer.prompt("Ruta del documento (PDF/TXT/MD)")
         doc_path = Path(doc_input).expanduser().resolve()
         if not doc_path.exists():
@@ -434,10 +498,10 @@ def wizard_cmd(
             )
             logger.info("wizard_index_ok doc_id=%s chunks=%s", doc_id, chunk_count)
             typer.echo(f"Indexado completado. chunks={chunk_count}")
-        except requests.RequestException:
+        except requests.RequestException as exc:
             logger.exception("wizard_index_lmstudio_error doc_id=%s", doc_id)
             sqlite_store.close()
-            raise typer.BadParameter("Error conectando con LM Studio durante indexado.") from None
+            raise typer.BadParameter(f"Error conectando con {provider_label} durante indexado. Detalle: {exc}") from None
         except Exception as exc:
             logger.exception("wizard_index_error doc_id=%s", doc_id)
             sqlite_store.close()
@@ -448,6 +512,12 @@ def wizard_cmd(
             sqlite_store.close()
             raise typer.BadParameter(
                 "No hay conocimiento indexado todavia. Indexa al menos un documento o ejecuta wizard sin --no-index."
+            )
+        if existing_models_for_filter and selected_embedding not in existing_models_for_filter:
+            sqlite_store.close()
+            raise typer.BadParameter(
+                "El embedding_model seleccionado no coincide con los documentos que vas a consultar "
+                f"({', '.join(existing_models_for_filter)})."
             )
         typer.echo(f"Usando base RAG existente. chunks_disponibles={total_chunks}")
 
@@ -477,12 +547,24 @@ def wizard_cmd(
                 top_k=top_k,
                 doc_id_filter=doc_id_filter,
             )
-        except requests.RequestException:
-            logger.exception("wizard_chat_lmstudio_error session_id=%s", session_id)
-            typer.echo("Error conectando con LM Studio durante chat.")
+        except requests.RequestException as exc:
+            logger.exception(
+                "wizard_chat_provider_error session_id=%s provider=%s",
+                session_id,
+                settings.llm_provider,
+            )
+            typer.echo(f"Error conectando con {_provider_label(settings)} durante chat.")
+            typer.echo(f"Detalle: {exc}")
             continue
         except Exception as exc:
             logger.exception("wizard_chat_error session_id=%s", session_id)
+            if _is_dimension_mismatch_error(exc):
+                typer.echo(
+                    "Error en chat: dimensiones de embedding incompatibles entre consulta y base vectorial. "
+                    f"embedding_model_actual={settings.embedding_model}. "
+                    "Usa el modelo con el que indexaste o reindexa."
+                )
+                continue
             typer.echo(f"Error en chat: {exc}")
             continue
         typer.echo("\nRespuesta:")
