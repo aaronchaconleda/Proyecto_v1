@@ -79,6 +79,25 @@ LM Studio debe estar corriendo con API OpenAI-compatible en:
 
 ## Uso rapido
 
+### Interfaz chatbot (solo consulta)
+
+La interfaz de chatbot esta orientada a usuario final para preguntar sobre documentos ya cargados en la RAG.
+No incluye carga/borrado/indexado; esas operaciones siguen por CLI (admin).
+
+Arranque:
+
+```bash
+chainlit run app/chatbot_ui.py -w
+```
+
+Flujo:
+- Al iniciar, pide perfil `local` u `openai`.
+- Conecta contra la base de ese perfil (`rag_local/chroma_local` o `rag_openai/chroma_openai`).
+- Usa el pipeline de QA existente y responde con fuentes.
+
+Requisito:
+- Debe existir conocimiento ya indexado en el perfil elegido (por ejemplo con `python -m app.cli wizard`).
+
 ### Opcion A: flujo guiado (un solo comando)
 
 ```bash
