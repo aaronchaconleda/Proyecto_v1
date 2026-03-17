@@ -164,16 +164,27 @@ def _bootstrap_runtime(profile: str) -> ChatRuntime:
     )
 
 
-def _store_source_chunks(chunks: list[dict]) -> dict[str, dict]:
+def _doc_path_map(sqlite_store: SQLiteStore, doc_ids: set[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for doc_id in doc_ids:
+        summary = sqlite_store.get_document_summary(doc_id)
+        if summary and summary.get("path"):
+            out[doc_id] = str(summary["path"])
+    return out
+
+
+def _store_source_chunks(chunks: list[dict], doc_paths: dict[str, str]) -> dict[str, dict]:
     source_map = {}
     for idx, chunk in enumerate(chunks, start=1):
+        doc_id = str(chunk.get("doc_id") or "")
         source_id = f"s{idx}"
         source_map[source_id] = {
-            "doc_id": chunk.get("doc_id"),
+            "doc_id": doc_id,
             "page": chunk.get("page"),
             "chunk_id": chunk.get("chunk_id"),
             "text": chunk.get("text", ""),
             "score": chunk.get("score_final", chunk.get("score_vector", 0.0)),
+            "path": doc_paths.get(doc_id),
         }
     cl.user_session.set("last_source_map", source_map)
     return source_map
@@ -255,6 +266,46 @@ async def on_view_source_chunk(action: cl.Action):
     await cl.Message(content=f"Fuente exacta:\n{header}\n\n{text}").send()
 
 
+@cl.action_callback("open_source_document")
+async def on_open_source_document(action: cl.Action):
+    source_map = cl.user_session.get("last_source_map") or {}
+    source_id = str((action.payload or {}).get("source_id", ""))
+    item = source_map.get(source_id)
+    if not item:
+        await cl.Message(content="No encontre la fuente seleccionada en la sesion actual.").send()
+        return
+
+    raw_path = item.get("path")
+    if not raw_path:
+        await cl.Message(content="No encontre la ruta del documento para esta fuente.").send()
+        return
+
+    file_path = Path(str(raw_path))
+    if not file_path.exists():
+        await cl.Message(content=f"El archivo no existe en disco: {file_path}").send()
+        return
+
+    page = item.get("page")
+    if file_path.suffix.lower() == ".pdf":
+        await cl.Message(
+            content=f"Documento fuente: {file_path.name} (pagina {page or '?'})",
+            elements=[
+                cl.Pdf(
+                    name=file_path.name,
+                    path=str(file_path),
+                    page=int(page) if page is not None else None,
+                    display="page",
+                )
+            ],
+        ).send()
+        return
+
+    await cl.Message(
+        content=f"Documento fuente: {file_path.name}",
+        elements=[cl.File(name=file_path.name, path=str(file_path), display="page")],
+    ).send()
+
+
 @cl.on_message
 async def on_message(message: cl.Message):
     runtime: Optional[ChatRuntime] = cl.user_session.get("runtime")
@@ -311,19 +362,29 @@ async def on_message(message: cl.Message):
     await cl.Message(content=out).send()
 
     if chunks:
-        source_map = _store_source_chunks(chunks)
+        doc_ids = {str(chunk.get("doc_id") or "") for chunk in chunks if chunk.get("doc_id")}
+        doc_paths = _doc_path_map(runtime.sqlite_store, doc_ids)
+        source_map = _store_source_chunks(chunks, doc_paths)
         actions = []
         for source_id, item in source_map.items():
-            label = f"{source_id} [{item.get('doc_id')}:p{item.get('page', '?')}]"
+            base = f"{source_id} [{item.get('doc_id')}:p{item.get('page', '?')}]"
             actions.append(
                 cl.Action(
                     name="view_source_chunk",
                     payload={"source_id": source_id},
-                    label=label,
+                    label=f"{base} texto",
                     tooltip="Ver parrafo exacto usado por RAG",
                 )
             )
+            actions.append(
+                cl.Action(
+                    name="open_source_document",
+                    payload={"source_id": source_id},
+                    label=f"{base} abrir",
+                    tooltip="Abrir documento fuente en su pagina",
+                )
+            )
         await cl.Message(
-            content="Haz clic en una fuente para ver el parrafo exacto recuperado:",
+            content="Fuentes interactivas: ver texto exacto o abrir documento en pagina.",
             actions=actions,
         ).send()

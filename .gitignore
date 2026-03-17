@@ -13,3 +13,4 @@ data
 .chainlit/translations/
 .chainlit/.files/
 chainlit.md
+.files
