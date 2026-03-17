@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import sys
+import tempfile
 import uuid
 from typing import Any, Optional
 
 import chainlit as cl
+import fitz
 import requests
 
 # Ensure project root is available when Chainlit loads this module directly.
@@ -190,6 +193,98 @@ def _store_source_chunks(chunks: list[dict], doc_paths: dict[str, str]) -> dict[
     return source_map
 
 
+def _chunk_search_probes(chunk_text: str) -> list[str]:
+    base = " ".join((chunk_text or "").split())
+    if not base:
+        return []
+
+    # Remove markdown/math wrappers that may not exist in raw PDF text.
+    normalized = (
+        base.replace("$", "")
+        .replace("{", "")
+        .replace("}", "")
+        .replace("_", "")
+    )
+    normalized = " ".join(normalized.split())
+    if not normalized:
+        return []
+
+    probes: list[str] = []
+
+    # Full paragraph first.
+    probes.append(normalized)
+
+    # Sentence/bullet fragments to capture the whole chunk progressively.
+    sentence_parts = re.split(r"[•\n\r]+|(?<=[\.\:\;\?\!])\s+", normalized)
+    for part in sentence_parts:
+        part = part.strip()
+        if len(part) >= 30:
+            probes.append(part)
+
+    # Sliding windows as fallback for OCR/noisy extraction mismatches.
+    words = normalized.split()
+    win_sizes = [28, 18, 12, 8]
+    for size in win_sizes:
+        if len(words) < size:
+            continue
+        step = max(3, size // 3)
+        for i in range(0, len(words) - size + 1, step):
+            probe = " ".join(words[i : i + size]).strip()
+            if len(probe) >= 25:
+                probes.append(probe)
+
+    # Deduplicate and prefer longer probes first.
+    dedup = list(dict.fromkeys(probes))
+    dedup.sort(key=len, reverse=True)
+    return dedup[:80]
+
+
+def _create_highlighted_pdf(source_path: Path, page_number: Optional[int], chunk_text: str) -> tuple[Path, int]:
+    doc = fitz.open(str(source_path))
+    try:
+        if page_number is None or int(page_number) <= 0:
+            out_tmp = Path(tempfile.mkdtemp(prefix="rag_pdf_")) / f"annot_{source_path.name}"
+            doc.save(str(out_tmp))
+            return out_tmp, 0
+
+        page_idx = int(page_number) - 1
+        if page_idx < 0 or page_idx >= len(doc):
+            out_tmp = Path(tempfile.mkdtemp(prefix="rag_pdf_")) / f"annot_{source_path.name}"
+            doc.save(str(out_tmp))
+            return out_tmp, 0
+
+        page = doc[page_idx]
+        added = 0
+        seen_rects: set[tuple[float, float, float, float]] = set()
+        for probe in _chunk_search_probes(chunk_text):
+            hits = page.search_for(probe, flags=fitz.TEXT_DEHYPHENATE)
+            if not hits:
+                continue
+            for rect in hits:
+                key = (
+                    round(rect.x0, 1),
+                    round(rect.y0, 1),
+                    round(rect.x1, 1),
+                    round(rect.y1, 1),
+                )
+                if key in seen_rects:
+                    continue
+                seen_rects.add(key)
+                annot = page.add_highlight_annot(rect)
+                annot.update()
+                added += 1
+                if added >= 120:
+                    break
+            if added >= 120:
+                break
+
+        out_tmp = Path(tempfile.mkdtemp(prefix="rag_pdf_")) / f"annot_{source_path.name}"
+        doc.save(str(out_tmp))
+        return out_tmp, added
+    finally:
+        doc.close()
+
+
 @cl.on_chat_start
 async def on_chat_start():
     base_settings = load_settings()
@@ -287,14 +382,31 @@ async def on_open_source_document(action: cl.Action):
 
     page = item.get("page")
     if file_path.suffix.lower() == ".pdf":
+        try:
+            highlighted_path, highlights = _create_highlighted_pdf(
+                source_path=file_path,
+                page_number=int(page) if page is not None else None,
+                chunk_text=str(item.get("text") or ""),
+            )
+        except Exception as exc:
+            await cl.Message(content=f"No pude generar resaltado en PDF: {exc}").send()
+            highlighted_path = file_path
+            highlights = 0
+
+        info = f"Documento fuente: {file_path.name} (pagina {page or '?'})"
+        if highlights > 0:
+            info += f"\nResaltados aplicados: {highlights}"
+        else:
+            info += "\nNo se encontro coincidencia exacta para resaltar en esta pagina."
         await cl.Message(
-            content=f"Documento fuente: {file_path.name} (pagina {page or '?'})",
+            content=info,
             elements=[
                 cl.Pdf(
-                    name=file_path.name,
-                    path=str(file_path),
+                    name=highlighted_path.name,
+                    path=str(highlighted_path),
                     page=int(page) if page is not None else None,
-                    display="page",
+                    display="inline",
+                    size="large",
                 )
             ],
         ).send()
