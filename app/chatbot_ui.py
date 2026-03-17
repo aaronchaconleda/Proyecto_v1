@@ -164,6 +164,21 @@ def _bootstrap_runtime(profile: str) -> ChatRuntime:
     )
 
 
+def _store_source_chunks(chunks: list[dict]) -> dict[str, dict]:
+    source_map = {}
+    for idx, chunk in enumerate(chunks, start=1):
+        source_id = f"s{idx}"
+        source_map[source_id] = {
+            "doc_id": chunk.get("doc_id"),
+            "page": chunk.get("page"),
+            "chunk_id": chunk.get("chunk_id"),
+            "text": chunk.get("text", ""),
+            "score": chunk.get("score_final", chunk.get("score_vector", 0.0)),
+        }
+    cl.user_session.set("last_source_map", source_map)
+    return source_map
+
+
 @cl.on_chat_start
 async def on_chat_start():
     base_settings = load_settings()
@@ -226,6 +241,20 @@ async def on_chat_end():
         runtime.sqlite_store.close()
 
 
+@cl.action_callback("view_source_chunk")
+async def on_view_source_chunk(action: cl.Action):
+    source_map = cl.user_session.get("last_source_map") or {}
+    source_id = str((action.payload or {}).get("source_id", ""))
+    item = source_map.get(source_id)
+    if not item:
+        await cl.Message(content="No encontre la fuente seleccionada en la sesion actual.").send()
+        return
+
+    header = f"[{item.get('doc_id')}:p{item.get('page', '?')}:{item.get('chunk_id')}] score={float(item.get('score', 0.0)):.4f}"
+    text = str(item.get("text") or "").strip() or "(chunk sin texto)"
+    await cl.Message(content=f"Fuente exacta:\n{header}\n\n{text}").send()
+
+
 @cl.on_message
 async def on_message(message: cl.Message):
     runtime: Optional[ChatRuntime] = cl.user_session.get("runtime")
@@ -270,8 +299,9 @@ async def on_message(message: cl.Message):
         await cl.Message(content=f"Error en chat: {exc}").send()
         return
 
+    chunks = result["chunks"]
     sources = []
-    for idx, chunk in enumerate(result["chunks"], start=1):
+    for idx, chunk in enumerate(chunks, start=1):
         score = chunk.get("score_final", chunk.get("score_vector", 0.0))
         sources.append(f"{idx}. [{chunk['doc_id']}:p{chunk.get('page', '?')}:{chunk['chunk_id']}] score={score:.4f}")
 
@@ -279,3 +309,21 @@ async def on_message(message: cl.Message):
     if sources:
         out = f"{out}\n\nFuentes:\n" + "\n".join(sources)
     await cl.Message(content=out).send()
+
+    if chunks:
+        source_map = _store_source_chunks(chunks)
+        actions = []
+        for source_id, item in source_map.items():
+            label = f"{source_id} [{item.get('doc_id')}:p{item.get('page', '?')}]"
+            actions.append(
+                cl.Action(
+                    name="view_source_chunk",
+                    payload={"source_id": source_id},
+                    label=label,
+                    tooltip="Ver parrafo exacto usado por RAG",
+                )
+            )
+        await cl.Message(
+            content="Haz clic en una fuente para ver el parrafo exacto recuperado:",
+            actions=actions,
+        ).send()
