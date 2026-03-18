@@ -184,6 +184,7 @@ def _store_source_chunks(chunks: list[dict], doc_paths: dict[str, str]) -> dict[
         source_map[source_id] = {
             "doc_id": doc_id,
             "page": chunk.get("page"),
+            "page_end": chunk.get("page_end", chunk.get("page")),
             "chunk_id": chunk.get("chunk_id"),
             "text": chunk.get("text", ""),
             "score": chunk.get("score_final", chunk.get("score_vector", 0.0)),
@@ -191,6 +192,24 @@ def _store_source_chunks(chunks: list[dict], doc_paths: dict[str, str]) -> dict[
         }
     cl.user_session.set("last_source_map", source_map)
     return source_map
+
+
+def _page_label(page_start: Any, page_end: Any) -> str:
+    try:
+        p1 = int(page_start) if page_start is not None else None
+    except (TypeError, ValueError):
+        p1 = None
+    try:
+        p2 = int(page_end) if page_end is not None else None
+    except (TypeError, ValueError):
+        p2 = None
+    if p1 is None and p2 is None:
+        return "?"
+    if p1 is None:
+        return str(p2)
+    if p2 is None or p2 == p1:
+        return str(p1)
+    return f"{p1}-{p2}"
 
 
 def _chunk_search_probes(chunk_text: str) -> list[str]:
@@ -356,7 +375,8 @@ async def on_view_source_chunk(action: cl.Action):
         await cl.Message(content="No encontre la fuente seleccionada en la sesion actual.").send()
         return
 
-    header = f"[{item.get('doc_id')}:p{item.get('page', '?')}:{item.get('chunk_id')}] score={float(item.get('score', 0.0)):.4f}"
+    page_label = _page_label(item.get("page"), item.get("page_end"))
+    header = f"[{item.get('doc_id')}:p{page_label}:{item.get('chunk_id')}] score={float(item.get('score', 0.0)):.4f}"
     text = str(item.get("text") or "").strip() or "(chunk sin texto)"
     await cl.Message(content=f"Fuente exacta:\n{header}\n\n{text}").send()
 
@@ -381,6 +401,7 @@ async def on_open_source_document(action: cl.Action):
         return
 
     page = item.get("page")
+    page_label = _page_label(item.get("page"), item.get("page_end"))
     if file_path.suffix.lower() == ".pdf":
         try:
             highlighted_path, highlights = _create_highlighted_pdf(
@@ -393,7 +414,7 @@ async def on_open_source_document(action: cl.Action):
             highlighted_path = file_path
             highlights = 0
 
-        info = f"Documento fuente: {file_path.name} (pagina {page or '?'})"
+        info = f"Documento fuente: {file_path.name} (pagina {page_label})"
         if highlights > 0:
             info += f"\nResaltados aplicados: {highlights}"
         else:
@@ -466,7 +487,8 @@ async def on_message(message: cl.Message):
     sources = []
     for idx, chunk in enumerate(chunks, start=1):
         score = chunk.get("score_final", chunk.get("score_vector", 0.0))
-        sources.append(f"{idx}. [{chunk['doc_id']}:p{chunk.get('page', '?')}:{chunk['chunk_id']}] score={score:.4f}")
+        page_label = _page_label(chunk.get("page"), chunk.get("page_end"))
+        sources.append(f"{idx}. [{chunk['doc_id']}:p{page_label}:{chunk['chunk_id']}] score={score:.4f}")
 
     out = result["answer"]
     if sources:
@@ -479,7 +501,8 @@ async def on_message(message: cl.Message):
         source_map = _store_source_chunks(chunks, doc_paths)
         actions = []
         for source_id, item in source_map.items():
-            base = f"{source_id} [{item.get('doc_id')}:p{item.get('page', '?')}]"
+            page_label = _page_label(item.get("page"), item.get("page_end"))
+            base = f"{source_id} [{item.get('doc_id')}:p{page_label}]"
             actions.append(
                 cl.Action(
                     name="view_source_chunk",

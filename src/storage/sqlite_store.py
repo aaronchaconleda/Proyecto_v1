@@ -50,6 +50,8 @@ class SQLiteStore:
                 chunk_id TEXT PRIMARY KEY,
                 doc_id TEXT NOT NULL,
                 page INTEGER NOT NULL,
+                page_start INTEGER,
+                page_end INTEGER,
                 section TEXT,
                 offset_start INTEGER NOT NULL,
                 offset_end INTEGER NOT NULL,
@@ -122,7 +124,25 @@ class SQLiteStore:
             );
             """
         )
+        self._ensure_column(
+            table="chunks",
+            column="page_start",
+            ddl="ALTER TABLE chunks ADD COLUMN page_start INTEGER",
+        )
+        self._ensure_column(
+            table="chunks",
+            column="page_end",
+            ddl="ALTER TABLE chunks ADD COLUMN page_end INTEGER",
+        )
+        self.conn.execute("UPDATE chunks SET page_start = COALESCE(page_start, page) WHERE page_start IS NULL")
+        self.conn.execute("UPDATE chunks SET page_end = COALESCE(page_end, page_start, page) WHERE page_end IS NULL")
         self.conn.commit()
+
+    def _ensure_column(self, *, table: str, column: str, ddl: str) -> None:
+        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        names = {str(row["name"]) for row in rows}
+        if column not in names:
+            self.conn.execute(ddl)
 
     def upsert_document(self, doc_id: str, path: str, language: str, embedding_model: str) -> None:
         self.conn.execute(
@@ -147,6 +167,8 @@ class SQLiteStore:
                     chunk.chunk_id,
                     chunk.doc_id,
                     chunk.page,
+                    chunk.page,
+                    chunk.page_end,
                     chunk.section,
                     chunk.offset_start,
                     chunk.offset_end,
@@ -157,11 +179,15 @@ class SQLiteStore:
             )
         self.conn.executemany(
             """
-            INSERT INTO chunks(chunk_id, doc_id, page, section, offset_start, offset_end, text, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chunks(
+                chunk_id, doc_id, page, page_start, page_end, section, offset_start, offset_end, text, metadata_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chunk_id) DO UPDATE SET
                 doc_id=excluded.doc_id,
                 page=excluded.page,
+                page_start=excluded.page_start,
+                page_end=excluded.page_end,
                 section=excluded.section,
                 offset_start=excluded.offset_start,
                 offset_end=excluded.offset_end,
@@ -235,7 +261,9 @@ class SQLiteStore:
             if doc_ids:
                 placeholders = ", ".join(["?"] * len(doc_ids))
                 sql = f"""
-                    SELECT c.chunk_id, c.doc_id, c.page, c.section, c.text, bm25(chunks_fts) AS score
+                    SELECT
+                        c.chunk_id, c.doc_id, c.page, c.page_start, c.page_end, c.section, c.text,
+                        bm25(chunks_fts) AS score
                     FROM chunks_fts
                     JOIN chunks c ON c.rowid = chunks_fts.rowid
                     WHERE chunks_fts MATCH ?
@@ -248,7 +276,9 @@ class SQLiteStore:
             else:
                 rows = self.conn.execute(
                     """
-                    SELECT c.chunk_id, c.doc_id, c.page, c.section, c.text, bm25(chunks_fts) AS score
+                    SELECT
+                        c.chunk_id, c.doc_id, c.page, c.page_start, c.page_end, c.section, c.text,
+                        bm25(chunks_fts) AS score
                     FROM chunks_fts
                     JOIN chunks c ON c.rowid = chunks_fts.rowid
                     WHERE chunks_fts MATCH ?
@@ -264,7 +294,9 @@ class SQLiteStore:
             {
                 "chunk_id": row["chunk_id"],
                 "doc_id": row["doc_id"],
-                "page": row["page"],
+                "page": row["page_start"] if row["page_start"] is not None else row["page"],
+                "page_start": row["page_start"] if row["page_start"] is not None else row["page"],
+                "page_end": row["page_end"] if row["page_end"] is not None else row["page"],
                 "section": row["section"],
                 "text": row["text"],
                 "score_keyword": 1.0 / (1.0 + float(row["score"])),

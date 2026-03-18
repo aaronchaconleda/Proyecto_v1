@@ -27,6 +27,8 @@ class ChromaStore:
                 {
                     "doc_id": c.doc_id,
                     "page": c.page,
+                    "page_start": c.page,
+                    "page_end": c.page_end,
                     "section": c.section,
                     "offset_start": c.offset_start,
                     "offset_end": c.offset_end,
@@ -63,7 +65,9 @@ class ChromaStore:
                 {
                     "chunk_id": chunk_id,
                     "doc_id": meta.get("doc_id"),
-                    "page": meta.get("page"),
+                    "page": meta.get("page_start", meta.get("page")),
+                    "page_start": meta.get("page_start", meta.get("page")),
+                    "page_end": meta.get("page_end", meta.get("page")),
                     "section": meta.get("section"),
                     "text": doc,
                     "score_vector": score,

@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Tuple
 
-from src.chunking.chunk_metadata import ChunkRecord
-from src.chunking.semantic_chunker import semantic_chunk_by_paragraph
+from src.chunking.hybrid_chunker import chunk_document_hybrid
 from src.config.settings import AppSettings
 from src.ingestion.cleaning import basic_clean, remove_repeated_lines
 from src.ingestion.normalizer import normalize_text
@@ -40,17 +39,16 @@ def index_document(
     raw_texts = [text for _, text in pages]
     cleaned_pages = remove_repeated_lines(raw_texts)
 
-    all_chunks: List[ChunkRecord] = []
-    for (page_number, _), cleaned in zip(pages, cleaned_pages):
-        normalized = normalize_text(basic_clean(cleaned))
-        chunks = semantic_chunk_by_paragraph(
-            doc_id=doc_id,
-            page=page_number,
-            text=normalized,
-            chunk_size=settings.chunk_size,
-            overlap=settings.chunk_overlap,
-        )
-        all_chunks.extend(chunks)
+    normalized_pages = [
+        (page_number, normalize_text(basic_clean(cleaned)))
+        for (page_number, _), cleaned in zip(pages, cleaned_pages)
+    ]
+    all_chunks = chunk_document_hybrid(
+        doc_id=doc_id,
+        pages=normalized_pages,
+        chunk_size=settings.chunk_size,
+        overlap=settings.chunk_overlap,
+    )
 
     if not all_chunks:
         return 0

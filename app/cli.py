@@ -97,6 +97,18 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
+def _format_page_label(item: dict) -> str:
+    start = item.get("page_start", item.get("page"))
+    end = item.get("page_end", item.get("page"))
+    if start is None and end is None:
+        return "?"
+    if start is None:
+        return str(end)
+    if end is None or end == start:
+        return str(start)
+    return f"{start}-{end}"
+
+
 def _bootstrap():
     settings = load_settings()
     logger = setup_logging(settings.data_dir / "logs")
@@ -418,8 +430,9 @@ def chat_cmd(
     typer.echo(result["answer"])
     typer.echo("\nFuentes:")
     for idx, chunk in enumerate(result["chunks"], start=1):
+        page_label = _format_page_label(chunk)
         typer.echo(
-            f"{idx}. [{chunk['doc_id']}:p{chunk.get('page', '?')}:{chunk['chunk_id']}] "
+            f"{idx}. [{chunk['doc_id']}:p{page_label}:{chunk['chunk_id']}] "
             f"score={chunk.get('score_final', chunk.get('score_vector', 0.0)):.4f}"
         )
     typer.echo(f"\nlatency_ms={result['latency_ms']} query_id={result['query_id']}")
@@ -571,8 +584,9 @@ def wizard_cmd(
         typer.echo(result["answer"])
         typer.echo("\nFuentes:")
         for idx, chunk in enumerate(result["chunks"], start=1):
+            page_label = _format_page_label(chunk)
             typer.echo(
-                f"{idx}. [{chunk['doc_id']}:p{chunk.get('page', '?')}:{chunk['chunk_id']}] "
+                f"{idx}. [{chunk['doc_id']}:p{page_label}:{chunk['chunk_id']}] "
                 f"score={chunk.get('score_final', chunk.get('score_vector', 0.0)):.4f}"
             )
         typer.echo("")

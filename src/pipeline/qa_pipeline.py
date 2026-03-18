@@ -13,12 +13,28 @@ from src.storage.sqlite_store import SQLiteStore
 
 
 def _conversation_for_llm(rows: List[Dict]) -> List[Dict[str, str]]:
-    messages: List[Dict[str, str]] = []
+    raw_messages: List[Dict[str, str]] = []
     for row in rows:
         role = row["role"]
-        if role in {"user", "assistant", "system"}:
-            messages.append({"role": role, "content": row["content"]})
-    return messages
+        if role in {"user", "assistant"}:
+            raw_messages.append({"role": role, "content": row["content"]})
+
+    # Some local model templates (LM Studio / GGUF) require strict alternation
+    # user/assistant/user/... and typically reject histories that start with assistant.
+    while raw_messages and raw_messages[0]["role"] != "user":
+        raw_messages.pop(0)
+
+    normalized: List[Dict[str, str]] = []
+    for msg in raw_messages:
+        if not normalized:
+            normalized.append(msg)
+            continue
+        if normalized[-1]["role"] == msg["role"]:
+            # Keep chronology and avoid duplicate-role adjacency.
+            normalized[-1] = msg
+        else:
+            normalized.append(msg)
+    return normalized
 
 
 def answer_question(
