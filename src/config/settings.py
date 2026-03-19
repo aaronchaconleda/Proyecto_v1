@@ -21,6 +21,7 @@ class AppSettings:
     openai_base_url: str
     openai_api_key: str
     chat_model: str
+    llm_temperature: float
     embedding_model: str
     chunk_size: int
     chunk_overlap_ratio: float
@@ -64,6 +65,7 @@ def load_settings() -> AppSettings:
         openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         chat_model=os.getenv("RAG_CHAT_MODEL", default_chat_model),
+        llm_temperature=float(os.getenv("RAG_TEMPERATURE", "0.1")),
         embedding_model=os.getenv("RAG_EMBEDDING_MODEL", default_embedding_model),
         chunk_size=int(os.getenv("RAG_CHUNK_SIZE", "140")),
         chunk_overlap_ratio=float(os.getenv("RAG_CHUNK_OVERLAP_RATIO", "0.20")),

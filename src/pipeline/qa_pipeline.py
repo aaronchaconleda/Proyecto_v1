@@ -82,6 +82,7 @@ def answer_question(
     answer, usage = generate_answer(
         client=lmstudio_client,
         chat_model=chat_model,
+        temperature=settings.llm_temperature,
         question=question,
         retrieved_chunks=retrieved,
         conversation_history=history_for_llm,

@@ -67,6 +67,7 @@ LM Studio debe estar corriendo con API OpenAI-compatible en:
 - RAG_SQLITE_PATH (default: data/rag_<profile>.db)
 - RAG_CHROMA_DIR (default: data/chroma_<profile>)
 - RAG_CHAT_MODEL (default segun perfil: `qwen/qwen3-4b-thinking-2507` en local, `gpt-5-nano` en openai)
+- RAG_TEMPERATURE (default: 0.1)
 - RAG_EMBEDDING_MODEL (default segun perfil: `text-embedding-nomic-embed-code` en local, `text-embedding-3-small` en openai)
 - OPENAI_BASE_URL (default: https://api.openai.com/v1)
 - OPENAI_API_KEY (requerida si RAG_LLM_PROVIDER=openai)

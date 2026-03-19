@@ -19,6 +19,7 @@ def generate_answer(
     *,
     client: LMStudioClient,
     chat_model: str,
+    temperature: float,
     question: str,
     retrieved_chunks: List[Dict],
     conversation_history: List[Dict[str, str]],
@@ -29,7 +30,7 @@ def generate_answer(
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": user_prompt})
 
-    response = client.chat(model=chat_model, messages=messages)
+    response = client.chat(model=chat_model, messages=messages, temperature=temperature)
     choice = response["choices"][0]["message"]["content"]
     answer = enforce_no_hallucination(choice)
     usage = response.get("usage", {})
