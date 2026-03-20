@@ -1,0 +1,128 @@
+:root {
+  --leda-primary: #003366;
+  --leda-primary-hover: #001f3f;
+  --leda-accent: #0066cc;
+  --leda-radius: 12px;
+}
+
+/* ---------- Dark theme (default) ---------- */
+html.dark,
+html[data-theme="dark"] {
+  --leda-bg: #0b1220;
+  --leda-surface: #121a2a;
+  --leda-surface-soft: #182236;
+  --leda-text: #e8eef8;
+  --leda-text-muted: #9fb0c8;
+  --leda-user-msg: #1b335b;
+  --leda-assistant-msg: #182236;
+  --leda-border: #263551;
+}
+
+/* ---------- Light theme ---------- */
+html.light,
+html[data-theme="light"] {
+  --leda-bg: #f4f7fb;
+  --leda-surface: #ffffff;
+  --leda-surface-soft: #f8fbff;
+  --leda-text: #1a1f2b;
+  --leda-text-muted: #5c6780;
+  --leda-user-msg: #e6f0ff;
+  --leda-assistant-msg: #f8f9fa;
+  --leda-border: #d7e1ef;
+}
+
+html,
+body,
+#root {
+  background: var(--leda-bg) !important;
+  color: var(--leda-text) !important;
+  font-size: 16px !important;
+  line-height: 1.55 !important;
+}
+
+a {
+  color: var(--leda-accent) !important;
+}
+
+/* Header */
+header,
+[data-testid="header"] {
+  background: var(--leda-bg) !important;
+  border-bottom: 1px solid var(--leda-border) !important;
+}
+
+/* Buttons / actions */
+button,
+.MuiButton-root,
+.MuiIconButton-root {
+  border-radius: var(--leda-radius) !important;
+}
+
+.MuiButton-contained,
+.MuiButton-containedPrimary {
+  background: var(--leda-primary) !important;
+  color: #ffffff !important;
+}
+
+.MuiButton-contained:hover,
+.MuiButton-containedPrimary:hover {
+  background: var(--leda-primary-hover) !important;
+}
+
+/* Message bubbles */
+[data-testid="user-message"] .message-content,
+[data-testid="assistant-message"] .message-content {
+  border-radius: 14px !important;
+  border: 1px solid var(--leda-border) !important;
+}
+
+[data-testid="user-message"] .message-content {
+  background: var(--leda-user-msg) !important;
+}
+
+[data-testid="assistant-message"] .message-content {
+  background: var(--leda-assistant-msg) !important;
+}
+
+/* Composer/input area */
+textarea,
+input,
+.MuiInputBase-root,
+[data-testid="message-composer"] {
+  color: var(--leda-text) !important;
+}
+
+.MuiPaper-root,
+.MuiCard-root {
+  background: var(--leda-surface) !important;
+  color: var(--leda-text) !important;
+}
+
+/* Helper/secondary text */
+.MuiTypography-colorTextSecondary,
+.MuiTypography-body2,
+small {
+  color: var(--leda-text-muted) !important;
+}
+
+/* Readability tuning */
+.message-content {
+  font-size: 1rem !important;
+  line-height: 1.6 !important;
+}
+
+/* Wider chat column for long-form answers */
+main,
+[data-testid="chat-container"] {
+  max-width: 1180px !important;
+}
+
+/* Welcome/logo image: smaller and centered */
+.message-content img {
+  display: block !important;
+  max-width: 160px !important;
+  width: 100%;
+  height: auto !important;
+  margin: 0.5rem auto !important;
+  border-radius: 10px;
+}

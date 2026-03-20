@@ -322,6 +322,20 @@ async def on_chat_start():
         await cl.Message(content=f"No se pudo iniciar el chatbot: {exc}").send()
         return
 
+    logo_path = ROOT_DIR / "public" / "leda_mc_logo_rectangular.jpg"
+    if logo_path.exists():
+        await cl.Message(
+            content="Bienvenido a **Leda Insight**.\nAsistente RAG de Leda MC.",
+            elements=[
+                cl.Image(
+                    name="Leda MC",
+                    path=str(logo_path),
+                    display="inline",
+                    size="small",
+                )
+            ],
+        ).send()
+
     try:
         models = runtime.llm_client.list_models()
     except Exception:
