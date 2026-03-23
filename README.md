@@ -6,6 +6,23 @@ RAG con dos perfiles en la misma estructura:
 - ChromaDB para busqueda vectorial.
 - SQLite para documentos, chunks, sesiones e historial.
 
+## Importante (evitar errores de dimension)
+
+No mezcles documentos indexados con distintos modelos de embedding en la misma base vectorial.
+
+- Cada modelo puede generar vectores con distinta dimension (por ejemplo `3584`, `768`, `1536`).
+- Si indexas con un modelo y consultas con otro en la misma coleccion, apareceran errores como:
+  - `Collection expecting embedding with dimension X, got Y`.
+
+Regla practica:
+- Si cambias `RAG_EMBEDDING_MODEL`, usa rutas nuevas para esa RAG:
+  - `RAG_SQLITE_PATH=...`
+  - `RAG_CHROMA_DIR=...`
+
+Ejemplo:
+- Local `text-embedding-nomic-embed-code` (3584): `data/rag_local.db` + `data/chroma_local`
+- Local `text-embedding-nomic-embed-text-v1.5` (768): `data/rag_local_768.db` + `data/chroma_local_768`
+
 ## Estructura
 
 - src/config: settings y prompts.
