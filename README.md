@@ -51,6 +51,9 @@ LMSTUDIO_API_KEY=lm-studio
 # RAG_LLM_PROVIDER=openai
 # OPENAI_BASE_URL=https://api.openai.com/v1
 # OPENAI_API_KEY=tu_api_key
+# RAG_CHAT_MODEL=gpt-5-nano
+# RAG_EMBEDDING_MODEL=text-embedding-3-small
+# RAG_TEMPERATURE=1
 ```
 
 Notas:
@@ -77,6 +80,10 @@ LM Studio debe estar corriendo con API OpenAI-compatible en:
 - RAG_TOP_K (default: 6)
 - RAG_VECTOR_WEIGHT (default: 0.7)
 - RAG_KEYWORD_WEIGHT (default: 0.3)
+
+Nota OpenAI:
+- Algunos modelos (por ejemplo `gpt-5-nano`) no aceptan temperatura personalizada en `chat/completions`.
+- En esos casos usa `RAG_TEMPERATURE=1`.
 
 ## Uso rapido
 
